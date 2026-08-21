@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Timeflow — Activity Tracker</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3E%3Cstop%20offset='0'%20stop-color='%232a78d6'/%3E%3Cstop%20offset='1'%20stop-color='%231baf7a'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='url(%23g)'/%3E%3Crect%20x='14'%20y='16'%20width='36'%20height='7'%20rx='3.5'%20fill='%23fff'%20opacity='.95'/%3E%3Crect%20x='14'%20y='29'%20width='26'%20height='7'%20rx='3.5'%20fill='%23fff'%20opacity='.75'/%3E%3Crect%20x='14'%20y='42'%20width='32'%20height='7'%20rx='3.5'%20fill='%23fff'%20opacity='.55'/%3E%3C/svg%3E">
 <style>
 /* ============ Design tokens — Notion-ish, light/dark ============ */
 :root {
@@ -439,6 +440,7 @@ input { font: inherit; color: inherit; }
     <div class="week-label" id="weekLabel"></div>
     <div class="spacer"></div>
     <button class="btn outline" id="goalsBtn" title="Show / hide goals">🎯 Goals</button>
+    <button class="btn outline" id="gcalBtn" title="Connect your Google Calendar — meetings appear on the grid">📅 Sync</button>
     <button class="btn icon" id="soundBtn" title="Toggle sound"></button>
     <button class="btn icon" id="themeBtn" title="Toggle theme"></button>
     <button class="btn outline" id="dataBtn">Data</button>
@@ -565,6 +567,105 @@ function applyGoalSeed() {
       setTimeout(() => toast("🎯 " + n + " goals added from your plan"), 1000);
     }
   } catch (e) {}
+}
+
+/* ---------------- Google Calendar — "Connect" button (client-side OAuth) ----------------
+   Whoever opens this site can connect THEIR OWN Google account. The access
+   token lives only in this page's memory; events are fetched directly from
+   Google into your browser and merged into local storage. Nothing is sent
+   to any server. Setup for your own deployment: create an OAuth "Web
+   application" client ID in Google Cloud console (scope: calendar.readonly,
+   authorized JavaScript origin = your site's URL) and paste it below. */
+const GCAL_CLIENT_ID = "685689148690-0dmslupmks02qc40a1d9uttl3jps88nk.apps.googleusercontent.com"; // empty hides the 📅 Sync button
+
+let gcalToken = null;
+function gsiLoad() {
+  return new Promise((res, rej) => {
+    if (window.google && window.google.accounts) return res();
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.onload = res; s.onerror = () => rej(new Error("gsi load failed"));
+    document.head.appendChild(s);
+  });
+}
+async function gcalConnect() {
+  if (!GCAL_CLIENT_ID) { toast("Calendar sync isn't configured for this deployment"); return; }
+  try {
+    await gsiLoad();
+    const tc = window.google.accounts.oauth2.initTokenClient({
+      client_id: GCAL_CLIENT_ID,
+      scope: "https://www.googleapis.com/auth/calendar.readonly",
+      callback: (resp) => {
+        if (resp && resp.access_token) { gcalToken = resp.access_token; gcalFetch(); }
+        else toast("⚠ Google sign-in was cancelled");
+      },
+    });
+    tc.requestAccessToken({ prompt: gcalToken ? "" : "select_account" });
+  } catch (e) { toast("⚠ Couldn't load Google sign-in"); }
+}
+async function gcalFetch() {
+  try {
+    toast("Fetching your calendar…");
+    const from = addDays(weekStart, -14), to = addDays(weekStart, 28);
+    const url = "https://www.googleapis.com/calendar/v3/calendars/primary/events" +
+      "?singleEvents=true&orderBy=startTime&maxResults=250" +
+      "&timeMin=" + encodeURIComponent(from.toISOString()) +
+      "&timeMax=" + encodeURIComponent(to.toISOString());
+    const r = await fetch(url, { headers: { Authorization: "Bearer " + gcalToken } });
+    if (!r.ok) throw new Error("http " + r.status);
+    const data = await r.json();
+    const added = mergeCalendarEvents(data.items || []);
+    db.settings.gcalSynced = dkey(new Date());
+    save(); renderAll();
+    toast(added ? "✦ " + added + " meeting" + (added === 1 ? "" : "s") + " added from Google Calendar"
+                : "Calendar synced — nothing new to add");
+  } catch (e) { toast("⚠ Calendar fetch failed — try 📅 Sync again"); }
+}
+/* Merge Google Calendar events into the grid. Same contract as the seeds:
+   each event merges ONCE (tracked in db.imported); only empty slots are
+   painted, so your own edits and erasures always win. All-day events and
+   events you've declined are skipped. */
+function mergeCalendarEvents(items) {
+  if (!db.imported) db.imported = {};
+  let cat = db.categories.find(c => c.id === "meetings");
+  if (!cat && db.categories.length < 8) {
+    const usedSlots = new Set(db.categories.map(c => c.slot));
+    let slot = 2; while (usedSlots.has(slot) && slot < 8) slot++;
+    cat = { id: "meetings", name: "Meetings", slot };
+    db.categories.push(cat);
+  }
+  if (!cat) cat = db.categories[0];
+  if (!cat) return 0;
+  let added = 0;
+  for (const ev of items) {
+    if (!ev || !ev.id || !ev.start || !ev.start.dateTime || !ev.end || !ev.end.dateTime) continue;
+    if (ev.status === "cancelled") continue;
+    const me = (ev.attendees || []).find(a => a.self);
+    if (me && me.responseStatus === "declined") continue;
+    if (db.imported[ev.id]) continue;
+    db.imported[ev.id] = 1;
+    const s = new Date(ev.start.dateTime), e = new Date(ev.end.dateTime);
+    if (!(s < e)) continue;
+    let painted = false;
+    let cur = new Date(s);
+    while (cur < e) {
+      const midnight = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate());
+      const dayEnd = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+      const segEnd = e < dayEnd ? e : dayEnd;
+      let s0 = Math.floor((cur - midnight) / 60000 / SLOT_MIN);
+      let s1 = Math.ceil((segEnd - midnight) / 60000 / SLOT_MIN);
+      if (s1 <= s0) s1 = s0 + 1;
+      const dk2 = dkey(cur);
+      const day = db.days[dk2] || (db.days[dk2] = {});
+      for (let i = s0; i < Math.min(s1, SLOTS); i++) {
+        if (!day[i]) { day[i] = { c: cat.id, t: ev.summary || "Busy" }; painted = true; }
+      }
+      if (!Object.keys(day).length) delete db.days[dk2];
+      cur = dayEnd;
+    }
+    if (painted) added++;
+  }
+  return added;
 }
 
 /* ---------------- state ---------------- */
@@ -1414,7 +1515,11 @@ function openDataModal() {
   const nDays = Object.keys(db.days).length;
   let halves = 0; for (const dk of Object.keys(db.days)) halves += Object.keys(db.days[dk]).length;
   box.innerHTML = "<h3>Your data</h3>" +
-    '<div class="note" style="margin-top:0">' + nDays + " day" + (nDays===1?"":"s") + " tracked · " + fmtHours(halves) + " painted. Everything is saved in this app on your device — export a JSON backup any time.<br><br>💾 Tip: Export a JSON backup to move your data between browsers or devices.</div>" +
+    '<div class="note" style="margin-top:0">' + nDays + " day" + (nDays===1?"":"s") + " tracked · " + fmtHours(halves) + " painted. Everything is saved in this app on your device — export a JSON backup any time.<br><br>💾 Tip: Export a JSON backup to move your data between browsers or devices." +
+    (GCAL_CLIENT_ID ? "<br><br>📅 " + (db.settings.gcalSynced
+      ? "Google Calendar last synced <b>" + db.settings.gcalSynced + "</b> — press 📅 Sync to refresh. Meetings only fill empty slots; your edits always win."
+      : "Press <b>📅 Sync</b> in the top bar to connect your Google Calendar — your meetings appear on the grid, fetched straight into your browser.") : "") +
+    "</div>" +
     '<div class="m-actions" style="justify-content:flex-start">' +
     '<button class="btn outline" id="expBtn">⬇ Export JSON</button>' +
     '<button class="btn outline" id="impBtn">⬆ Import JSON</button>' +
@@ -1657,6 +1762,8 @@ document.getElementById("soundBtn").onclick = () => {
   if (db.settings.sound) sndDone();
 };
 document.getElementById("dataBtn").onclick = openDataModal;
+document.getElementById("gcalBtn").onclick = gcalConnect;
+if (!GCAL_CLIENT_ID) document.getElementById("gcalBtn").style.display = "none";
 document.getElementById("goalsBtn").onclick = () => {
   db.settings.goalsPanel = db.settings.goalsPanel === false;
   save(); renderGoals(); syncGoalsBtn();
