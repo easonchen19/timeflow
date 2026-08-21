@@ -963,6 +963,65 @@ function confetti(x, y) {
     }
   } catch (e) {}
 }
+/* ---- auto-planner: allocate a goal's unfinished estimated tasks into free slots ----
+   Strategy: plan from now to the goal's deadline (default +7 days); working
+   window 9:00–18:00; weekdays first, weekends only if needed; chunks of up to
+   2h with a half-hour breather between blocks; at most 3h per goal per day;
+   never touches occupied slots. Planned blocks are ordinary task paint —
+   erase or repaint anything you disagree with. */
+function autoPlanGoal(g) {
+  const queue = g.tasks.filter(t => !t.done).map(t => {
+    const est = estOf(t.title) || 1;
+    return { t, remain: Math.max(0, est - taskHalves(t.id) / 2) };
+  }).filter(x => x.remain > 0);
+  if (!queue.length) {
+    toast("Nothing to plan — add estimates to task names, like “Draft outline (2h)”");
+    return;
+  }
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const lastDay = g.due ? parseDk(g.due) : addDays(today, 7);
+  const W_START = 18, W_END = 36;      // 9:00 – 18:00
+  const MAX_CHUNK = 4, MAX_DAY = 6;    // ≤2h per block, ≤3h per goal per day
+  const nowSlot = Math.floor((now.getHours() * 60 + now.getMinutes()) / SLOT_MIN);
+  let placed = 0;
+  const passes = [d => (d.getDay() + 6) % 7 < 5, () => true]; // weekdays first, then any day
+  for (const pass of passes) {
+    for (let d = new Date(today); d <= lastDay && queue.length; d = addDays(d, 1)) {
+      if (!pass(d)) continue;
+      const dk2 = dkey(d);
+      const day = db.days[dk2] || (db.days[dk2] = {});
+      let dayUsed = 0;
+      for (const s of Object.keys(day)) if (day[s].g === g.id) dayUsed++;
+      let s = sameDay(d, now) ? Math.max(W_START, nowSlot + 1) : W_START;
+      while (s < W_END && queue.length && dayUsed < MAX_DAY) {
+        if (day[s]) { s++; continue; }
+        let runEnd = s;
+        while (runEnd < W_END && !day[runEnd] && runEnd - s < MAX_CHUNK) runEnd++;
+        const item = queue[0];
+        const chunk = Math.min(runEnd - s, Math.ceil(item.remain * 2), MAX_DAY - dayUsed);
+        if (chunk >= 1) {
+          for (let i = s; i < s + chunk; i++) day[i] = { g: g.id, k: item.t.id, t: item.t.title };
+          item.remain -= chunk / 2;
+          dayUsed += chunk; placed += chunk;
+          if (item.remain <= 0) queue.shift();
+          s = s + chunk + 1; // half-hour breather
+        } else {
+          s = runEnd + 1;
+        }
+      }
+      if (!Object.keys(day).length) delete db.days[dk2];
+    }
+    if (!queue.length) break;
+  }
+  save(); renderAll();
+  const left = queue.reduce((a, x) => a + x.remain, 0);
+  toast(placed
+    ? "⚡ Planned " + fmtHours(placed) + (left ? " — " + fmtH(left) + "h didn't fit before the deadline" : " ✓")
+    : "⚡ No free slots before the deadline — free up time or extend it");
+  if (placed) sndDone();
+}
+
 function toggleTaskDone(g, t, fxX, fxY) {
   t.done = !t.done;
   save();
@@ -1021,10 +1080,14 @@ function renderGoals() {
       if (armedTask && armedTask.g === g.id) armedTask = null;
       save(); renderAll();
     };
+    const plan = document.createElement("button");
+    plan.className = "goal-gear"; plan.textContent = "⚡";
+    plan.title = "Auto-plan — allocate unfinished tasks (with estimates) into free calendar slots";
+    plan.onclick = () => autoPlanGoal(g);
     const gear = document.createElement("button");
     gear.className = "goal-gear"; gear.textContent = "⚙"; gear.title = "Goal settings — target, deadline, vision";
     gear.onclick = () => openGoalModal(g);
-    top.append(dot, name, hrs, gear, x);
+    top.append(dot, name, hrs, plan, gear, x);
     card.appendChild(top);
 
     if (g.why) {
