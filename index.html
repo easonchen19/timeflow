@@ -654,10 +654,10 @@ async function gcalFetch() {
                 : "Calendar synced — nothing new to add");
   } catch (e) { toast("⚠ Calendar fetch failed — try 📅 Sync again"); }
 }
-/* Merge Google Calendar events into the grid. Same contract as the seeds:
-   each event merges ONCE (tracked in db.imported); only empty slots are
-   painted, so your own edits and erasures always win. All-day events and
-   events you've declined are skipped. */
+/* Merge Google Calendar events into the grid. Only EMPTY slots are painted,
+   so anything you've painted or relabeled stays yours — but a deleted meeting
+   comes back on the next Sync (pressing Sync means "reflect my calendar").
+   All-day events and events you've declined are skipped. */
 /* Best link/place for an event: video call link > URL in location >
    meeting URL in description > any URL in description > dial-in phone > physical location. */
 function eventLink(ev) {
@@ -696,8 +696,6 @@ function mergeCalendarEvents(items) {
     if (ev.status === "cancelled") continue;
     const me = (ev.attendees || []).find(a => a.self);
     if (me && me.responseStatus === "declined") continue;
-    if (db.imported[ev.id]) continue;
-    db.imported[ev.id] = 1;
     const s = new Date(ev.start.dateTime), e = new Date(ev.end.dateTime);
     if (!(s < e)) continue;
     const link = eventLink(ev);
