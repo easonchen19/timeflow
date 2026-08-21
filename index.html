@@ -1435,6 +1435,11 @@ document.addEventListener("pointerup", ev => {
     openBlockEditor(p.startedOnBlock, p.dayKey);
     return;
   }
+  // single-click erase on a block clears the WHOLE block — same as the popup's Delete
+  if (p.erase && !p.moved && p.startedOnBlock) {
+    deleteBlockRange(p.dayKey, +p.startedOnBlock.dataset.start, +p.startedOnBlock.dataset.end);
+    return;
+  }
   if (!db.days[p.dayKey]) db.days[p.dayKey] = {};
   const day = db.days[p.dayKey];
   for (let s = p.from; s <= p.to; s++) {
