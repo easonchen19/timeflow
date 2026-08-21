@@ -1452,6 +1452,34 @@ function deleteBlockRange(dayKey, start, end) {
   if (statsOpen) renderStats();
 }
 
+/* ---- copy / paste / repeat blocks ---- */
+let clipBlk = null; // {cells: [{off, cell}], start, end}
+let hoverDay = null; // dayKey currently under the cursor
+function copyBlockCells(dayKey, start, end) {
+  const day = db.days[dayKey] || {};
+  const cells = [];
+  for (let s = start; s < end; s++) if (day[s]) cells.push({ off: s - start, cell: JSON.parse(JSON.stringify(day[s])) });
+  return { cells, start, end };
+}
+function pasteBlock(clip, dayKey) {
+  if (!clip || !clip.cells.length) return 0;
+  const day = db.days[dayKey] || (db.days[dayKey] = {});
+  let painted = 0;
+  for (const { off, cell } of clip.cells) {
+    const s = clip.start + off;
+    if (s < SLOTS && !day[s]) { day[s] = JSON.parse(JSON.stringify(cell)); painted++; }
+  }
+  if (!Object.keys(day).length) delete db.days[dayKey];
+  return painted;
+}
+function repeatBlockTo(clip, dates) {
+  let days = 0;
+  for (const d of dates) if (pasteBlock(clip, dkey(d))) days++;
+  save(); renderAll();
+  toast(days ? "⧉ Repeated to " + days + " day" + (days > 1 ? "s" : "") : "Nothing pasted — those slots are already filled");
+  if (days) sndDone();
+}
+
 function slotFromY(col, clientY) {
   const r = col.getBoundingClientRect();
   let s = Math.floor((clientY - r.top) / SLOT_H);
@@ -1553,6 +1581,7 @@ let hoverEl = null;
 document.getElementById("calGrid").addEventListener("mousemove", ev => {
   if (paint) return;
   const col = ev.target.closest(".day-col");
+  hoverDay = col ? col.dataset.date : null;
   if (!col || ev.target.closest(".blk")) { if (hoverEl) { hoverEl.remove(); hoverEl = null; } return; }
   const s = slotFromY(col, ev.clientY);
   if (!hoverEl) { hoverEl = document.createElement("div"); hoverEl.className = "slot-hover"; }
@@ -1560,7 +1589,7 @@ document.getElementById("calGrid").addEventListener("mousemove", ev => {
   hoverEl.style.top = (s * SLOT_H) + "px";
   hoverEl.style.height = SLOT_H + "px";
 });
-document.getElementById("calGrid").addEventListener("mouseleave", () => { if (hoverEl) { hoverEl.remove(); hoverEl = null; } });
+document.getElementById("calGrid").addEventListener("mouseleave", () => { hoverDay = null; if (hoverEl) { hoverEl.remove(); hoverEl = null; } });
 
 /* ---------------- block editor popover ---------------- */
 let popEl = null;
@@ -1590,6 +1619,11 @@ function openBlockEditor(blkEl, dayKey, fresh) {
     '<input type="text" id="poLink" placeholder="🔗 Link or 📍 place (optional)" maxlength="200" style="margin-top:6px" value="' + esc(curLink).replace(/"/g, "&quot;") + '">' +
     (linkIsUrl ? '<a id="poOpen" href="' + esc(curLink).replace(/"/g, "&quot;") + '" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:7px;font-size:12px;color:var(--c1);text-decoration:none">Open link ↗</a>' : "") +
     (cat ? '<div class="po-cats" id="poCats"></div>' : "") +
+    '<div class="po-actions" style="justify-content:flex-start;gap:4px;flex-wrap:wrap">' +
+    '<button class="btn outline" id="poCopy" style="font-size:11.5px;padding:3px 8px" title="Copy — then hover a day and press V">⧉ Copy</button>' +
+    '<button class="btn outline" id="poTom" style="font-size:11.5px;padding:3px 8px">→ Tomorrow</button>' +
+    '<button class="btn outline" id="poWkd" style="font-size:11.5px;padding:3px 8px" title="Repeat onto Mon–Fri of this week">→ Weekdays</button>' +
+    '<button class="btn outline" id="poAll" style="font-size:11.5px;padding:3px 8px" title="Repeat onto the next 6 days">→ Every day</button></div>' +
     '<div class="po-actions">' +
     (task ? '<button class="btn" id="poDone" style="margin-right:auto">' + (task.done ? "↩ Reopen" : "✓ Mark done") + "</button>" : "") +
     '<button class="btn" id="poDelete">Delete</button>' +
@@ -1603,6 +1637,24 @@ function openBlockEditor(blkEl, dayKey, fresh) {
       toggleTaskDone(goal, task, r.left + 40, r.top + 20);
     };
   }
+
+  // copy / repeat
+  const clipNow = () => copyBlockCells(dayKey, start, end);
+  const base = parseDk(dayKey);
+  popEl.querySelector("#poCopy").onclick = () => {
+    clipBlk = clipNow(); closePopover();
+    toast("⧉ Copied — hover a day and press V to paste");
+  };
+  popEl.querySelector("#poTom").onclick = () => { const c = clipNow(); closePopover(); repeatBlockTo(c, [addDays(base, 1)]); };
+  popEl.querySelector("#poWkd").onclick = () => {
+    const mon = mondayOf(base);
+    const dates = [0, 1, 2, 3, 4].map(i => addDays(mon, i)).filter(d => dkey(d) !== dayKey);
+    const c = clipNow(); closePopover(); repeatBlockTo(c, dates);
+  };
+  popEl.querySelector("#poAll").onclick = () => {
+    const dates = [1, 2, 3, 4, 5, 6].map(i => addDays(base, i));
+    const c = clipNow(); closePopover(); repeatBlockTo(c, dates);
+  };
 
   // reposition near block
   const r = blkEl.getBoundingClientRect();
@@ -2005,9 +2057,20 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "e") { erasing = !erasing; renderPalette(); }
   if (e.key === "g") document.getElementById("goalsBtn").click();
-  if (e.key === "d") setView("day");
-  if (e.key === "w") setView("week");
-  if (e.key === "m") setView("month");
+  if (e.key === "d" && !e.metaKey && !e.ctrlKey) setView("day");
+  if (e.key === "w" && !e.metaKey && !e.ctrlKey) setView("week");
+  if (e.key === "m" && !e.metaKey && !e.ctrlKey) setView("month");
+  if ((e.key === "c" || e.key === "C") && hoverBlk) {
+    clipBlk = copyBlockCells(hoverBlk.dayKey, +hoverBlk.el.dataset.start, +hoverBlk.el.dataset.end);
+    toast("⧉ Copied — hover a day and press V to paste");
+    e.preventDefault();
+  }
+  if ((e.key === "v" || e.key === "V") && clipBlk && hoverDay) {
+    const n = pasteBlock(clipBlk, hoverDay);
+    if (n) { save(); refreshDay(hoverDay); renderGoals(); sndDone(); if (statsOpen) renderStats(); }
+    toast(n ? "⧉ Pasted" : "Nothing pasted — those slots are already filled");
+    e.preventDefault();
+  }
   if (e.key === "Backspace" || e.key === "Delete") {
     if (popEl) { popEl.querySelector("#poDelete").click(); e.preventDefault(); }
     else if (hoverBlk) {
