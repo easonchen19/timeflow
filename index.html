@@ -365,6 +365,29 @@ input { font: inherit; color: inherit; }
   .goals-panel { position: absolute; z-index: 30; top: 0; bottom: 0; left: 0; box-shadow: var(--shadow-pop); }
 }
 
+/* ============ Month view ============ */
+.cal-head.month-mode { grid-template-columns: repeat(7, 1fr); }
+.cal-scroll.no-scroll { overflow: hidden; }
+.cal-grid.month { display: block; height: 100%; }
+.month-grid { height: 100%; display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 1fr; }
+.m-cell {
+  border-left: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline);
+  padding: 5px 7px; display: flex; flex-direction: column; gap: 3px;
+  cursor: pointer; min-height: 0; min-width: 0; overflow: hidden;
+  transition: background .12s ease;
+}
+.m-cell:hover { background: var(--hover-wash); }
+.m-cell.other { opacity: .38; }
+.m-cell .m-top { display: flex; align-items: center; gap: 6px; }
+.m-cell .m-num {
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  width: 21px; height: 21px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%;
+}
+.m-cell.today .m-num { background: var(--ink); color: var(--page); }
+.m-cell .m-hours { font-size: 10.5px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.m-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin-top: auto; background: transparent; }
+.m-bar span { height: 100%; }
+
 /* confetti */
 .confetti {
   position: fixed; width: 8px; height: 8px; border-radius: 2px; z-index: 80; pointer-events: none;
@@ -438,6 +461,11 @@ input { font: inherit; color: inherit; }
       <button class="btn icon" id="nextBtn" title="Next week">›</button>
     </div>
     <div class="week-label" id="weekLabel"></div>
+    <div class="seg">
+      <button class="btn" id="viewDayBtn">Day</button>
+      <button class="btn" id="viewWeekBtn">Week</button>
+      <button class="btn" id="viewMonthBtn">Month</button>
+    </div>
     <div class="spacer"></div>
     <button class="btn outline" id="goalsBtn" title="Show / hide goals">🎯 Goals</button>
     <button class="btn outline" id="gcalBtn" title="Connect your Google Calendar — meetings appear on the grid">📅 Sync</button>
@@ -675,7 +703,9 @@ function mergeCalendarEvents(items) {
 
 /* ---------------- state ---------------- */
 let db = load();
-let weekStart = mondayOf(new Date());
+let anchor = new Date(); // the date the current view centers on
+let weekStart = mondayOf(anchor);
+let view = ["day", "week", "month"].includes(db.settings.view) ? db.settings.view : "week";
 let selectedCat = db.categories[0] ? db.categories[0].id : null;
 let erasing = false;
 let statsRange = "week";
@@ -1125,25 +1155,59 @@ function esc(s) { const d = document.createElement("div"); d.textContent = s; re
 const SLOT_H = 24; // px per 30 min
 function renderHead() {
   const head = document.getElementById("calHead");
-  head.innerHTML = '<div></div>';
+  head.classList.toggle("month-mode", view === "month");
+  head.innerHTML = "";
   const today = new Date();
-  for (let i = 0; i < 7; i++) {
-    const d = addDays(weekStart, i);
+  const lblEl = document.getElementById("weekLabel");
+  if (view === "day") {
+    head.innerHTML = "<div></div>";
+    head.style.setProperty("--days", 1);
     const div = document.createElement("div");
-    div.className = "day-head" + (sameDay(d, today) ? " today" : "");
-    div.innerHTML = DOW[i] + ' <span class="dnum">' + d.getDate() + "</span>";
+    div.className = "day-head" + (sameDay(anchor, today) ? " today" : "");
+    div.innerHTML = DOW[(anchor.getDay() + 6) % 7] + ' <span class="dnum">' + anchor.getDate() + "</span>";
     head.appendChild(div);
+    lblEl.innerHTML = MON[anchor.getMonth()] + " " + anchor.getDate() + " <small>" + anchor.getFullYear() + "</small>";
+  } else if (view === "month") {
+    for (let i = 0; i < 7; i++) {
+      const div = document.createElement("div");
+      div.className = "day-head";
+      div.textContent = DOW[i];
+      head.appendChild(div);
+    }
+    lblEl.innerHTML = ["January","February","March","April","May","June","July","August","September","October","November","December"][anchor.getMonth()] + " <small>" + anchor.getFullYear() + "</small>";
+  } else {
+    head.innerHTML = "<div></div>";
+    head.style.setProperty("--days", 7);
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(weekStart, i);
+      const div = document.createElement("div");
+      div.className = "day-head" + (sameDay(d, today) ? " today" : "");
+      div.innerHTML = DOW[i] + ' <span class="dnum">' + d.getDate() + "</span>";
+      head.appendChild(div);
+    }
+    const wEnd = addDays(weekStart, 6);
+    const lbl = weekStart.getMonth() === wEnd.getMonth()
+      ? MON[weekStart.getMonth()] + " " + weekStart.getDate() + "–" + wEnd.getDate()
+      : MON[weekStart.getMonth()] + " " + weekStart.getDate() + " – " + MON[wEnd.getMonth()] + " " + wEnd.getDate();
+    lblEl.innerHTML = lbl + " <small>" + wEnd.getFullYear() + "</small>";
   }
-  const wEnd = addDays(weekStart, 6);
-  const lbl = weekStart.getMonth() === wEnd.getMonth()
-    ? MON[weekStart.getMonth()] + " " + weekStart.getDate() + "–" + wEnd.getDate()
-    : MON[weekStart.getMonth()] + " " + weekStart.getDate() + " – " + MON[wEnd.getMonth()] + " " + wEnd.getDate();
-  document.getElementById("weekLabel").innerHTML = lbl + " <small>" + wEnd.getFullYear() + "</small>";
+  document.getElementById("viewDayBtn").classList.toggle("active-view", view === "day");
+  document.getElementById("viewWeekBtn").classList.toggle("active-view", view === "week");
+  document.getElementById("viewMonthBtn").classList.toggle("active-view", view === "month");
 }
 
 function renderGrid() {
   const grid = document.getElementById("calGrid");
+  const scroll = document.getElementById("calScroll");
   grid.innerHTML = "";
+  grid.classList.toggle("month", view === "month");
+  scroll.classList.toggle("no-scroll", view === "month");
+  hoverBlk = null;
+  if (view === "month") { renderMonth(grid); return; }
+
+  const nDays = view === "day" ? 1 : 7;
+  const startDate = view === "day" ? anchor : weekStart;
+  grid.style.setProperty("--days", nDays);
   const totalH = SLOTS * SLOT_H;
 
   // gutter
@@ -1158,8 +1222,8 @@ function renderGrid() {
   grid.appendChild(gut);
 
   const today = new Date();
-  for (let i = 0; i < 7; i++) {
-    const d = addDays(weekStart, i);
+  for (let i = 0; i < nDays; i++) {
+    const d = addDays(startDate, i);
     const col = document.createElement("div");
     col.className = "day-col" + (sameDay(d, today) ? " today" : "");
     col.style.height = totalH + "px";
@@ -1187,6 +1251,59 @@ function renderGrid() {
   });
 }
 
+function renderMonth(grid) {
+  document.querySelector(".cal-head").style.setProperty("--sbw", "0px");
+  const wrap = document.createElement("div");
+  wrap.className = "month-grid";
+  const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  const start = mondayOf(first);
+  const today = new Date();
+  const series = [
+    ...db.categories.map(c => ({ id: "c:" + c.id, color: catColor(c) })),
+    ...db.goals.map(g => ({ id: "g:" + g.id, color: goalColor(g) })),
+  ];
+  for (let i = 0; i < 42; i++) {
+    const d = addDays(start, i);
+    const dk2 = dkey(d);
+    const cell = document.createElement("div");
+    cell.className = "m-cell" + (d.getMonth() !== anchor.getMonth() ? " other" : "") + (sameDay(d, today) ? " today" : "");
+    const day = db.days[dk2];
+    const byS = {};
+    let halves = 0;
+    if (day) for (const v of Object.values(day)) {
+      if (!cellValid(v)) continue;
+      const key = v.c ? "c:" + v.c : "g:" + v.g;
+      byS[key] = (byS[key] || 0) + 1;
+      halves++;
+    }
+    cell.innerHTML = '<div class="m-top"><span class="m-num">' + d.getDate() + "</span>" +
+      (halves ? '<span class="m-hours">' + fmtHours(halves) + "</span>" : "") + "</div>";
+    if (halves) {
+      const bar = document.createElement("div");
+      bar.className = "m-bar";
+      for (const s of series) {
+        if (!byS[s.id]) continue;
+        const seg = document.createElement("span");
+        seg.style.width = (byS[s.id] / halves * 100) + "%";
+        seg.style.background = s.color;
+        bar.appendChild(seg);
+      }
+      cell.appendChild(bar);
+    }
+    cell.onclick = () => { anchor = d; setView("day"); };
+    wrap.appendChild(cell);
+  }
+  grid.appendChild(wrap);
+}
+
+function setView(v) {
+  view = v;
+  db.settings.view = v;
+  weekStart = mondayOf(anchor);
+  save(); renderAll();
+  if (v !== "month") scrollToMorning();
+}
+
 function positionNow() {
   const el = document.getElementById("nowLine");
   if (!el) return;
@@ -1207,9 +1324,10 @@ function blocksFor(dayKey) {
       if (cur && cur.key === key) {
         cur.end = s + 1;
         if (cell.t && !cur.t) cur.t = cell.t;
+        if (cell.l && !cur.l) cur.l = cell.l;
       } else {
         if (cur) blocks.push(cur);
-        cur = { key, c: cell.c || null, g: cell.g || null, k: cell.k || null, start: s, end: s + 1, t: cell.t || "" };
+        cur = { key, c: cell.c || null, g: cell.g || null, k: cell.k || null, start: s, end: s + 1, t: cell.t || "", l: cell.l || "" };
       }
     } else {
       if (cur) { blocks.push(cur); cur = null; }
@@ -1238,12 +1356,15 @@ function renderBlocks(col, dayKey) {
     el.dataset.start = b.start; el.dataset.end = b.end;
     el.dataset.cat = b.c || ""; el.dataset.goal = b.g || ""; el.dataset.task = b.k || "";
     const title = b.t || seriesName;
-    el.innerHTML = '<div class="blk-title">' + (goal ? "◦ " : "") + esc(title) + '</div>' +
-      '<div class="blk-sub">' + fmtTime(b.start) + " – " + fmtTime(b.end % SLOTS === 0 && b.end === SLOTS ? 0 : b.end) + " · " + fmtHours(nSlots) + '</div>';
+    const isUrl = b.l && /^(https?:\/\/|www\.)/i.test(b.l);
+    el.innerHTML = '<div class="blk-title">' + (goal ? "◦ " : "") + esc(title) + (isUrl ? " 🔗" : "") + '</div>' +
+      '<div class="blk-sub">' + fmtTime(b.start) + " – " + fmtTime(b.end % SLOTS === 0 && b.end === SLOTS ? 0 : b.end) + " · " + fmtHours(nSlots) +
+      (b.l && !isUrl ? " · 📍 " + esc(b.l) : "") + '</div>';
     el.addEventListener("mousemove", ev => {
-      showTip(ev.clientX, ev.clientY - 4, (b.t ? b.t + " · " : "") + seriesName + " · " + fmtTime(b.start) + "–" + fmtTime(b.end === SLOTS ? 0 : b.end) + " (" + fmtHours(nSlots) + ")");
+      showTip(ev.clientX, ev.clientY - 4, (b.t ? b.t + " · " : "") + seriesName + " · " + fmtTime(b.start) + "–" + fmtTime(b.end === SLOTS ? 0 : b.end) + " (" + fmtHours(nSlots) + ")" + (b.l ? " · " + b.l : ""));
     });
-    el.addEventListener("mouseleave", hideTip);
+    el.addEventListener("mouseenter", () => { hoverBlk = { el, dayKey }; });
+    el.addEventListener("mouseleave", () => { hoverBlk = null; hideTip(); });
     col.appendChild(el);
   }
 }
@@ -1255,6 +1376,15 @@ function refreshDay(dayKey) {
 
 /* ---------------- painting ---------------- */
 let paint = null; // {dayKey, col, anchor, from, to, erase, catId, moved}
+let hoverBlk = null; // {el, dayKey} — block currently under the cursor (Backspace deletes it)
+function deleteBlockRange(dayKey, start, end) {
+  const day = db.days[dayKey];
+  if (!day) return;
+  for (let s = start; s < end; s++) delete day[s];
+  if (Object.keys(day).length === 0) delete db.days[dayKey];
+  save(); refreshDay(dayKey); renderGoals(); sndErase();
+  if (statsOpen) renderStats();
+}
 
 function slotFromY(col, clientY) {
   const r = col.getBoundingClientRect();
@@ -1376,6 +1506,9 @@ function openBlockEditor(blkEl, dayKey, fresh) {
   const headName = cat ? cat.name : goal.name + (task ? " · task" : "");
   const day = db.days[dayKey] || {};
   const curTitle = (day[start] && day[start].t) || "";
+  let curLink = "";
+  for (let s = start; s < end; s++) if (day[s] && day[s].l) { curLink = day[s].l; break; }
+  const linkIsUrl = curLink && /^(https?:\/\/|www\.)/i.test(curLink);
 
   popEl = document.createElement("div");
   popEl.className = "popover";
@@ -1383,6 +1516,8 @@ function openBlockEditor(blkEl, dayKey, fresh) {
     '<div class="po-head"><span class="dot" style="background:' + color + '"></span>' +
     esc(headName) + " · " + fmtTime(start) + "–" + fmtTime(end === SLOTS ? 0 : end) + " · " + fmtHours(end - start) + "</div>" +
     '<input type="text" id="poTitle" placeholder="Add a label (optional)" maxlength="60" value="' + esc(curTitle).replace(/"/g, "&quot;") + '">' +
+    '<input type="text" id="poLink" placeholder="🔗 Link or 📍 place (optional)" maxlength="200" style="margin-top:6px" value="' + esc(curLink).replace(/"/g, "&quot;") + '">' +
+    (linkIsUrl ? '<a id="poOpen" href="' + esc(curLink).replace(/"/g, "&quot;") + '" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:7px;font-size:12px;color:var(--c1);text-decoration:none">Open link ↗</a>' : "") +
     (cat ? '<div class="po-cats" id="poCats"></div>' : "") +
     '<div class="po-actions">' +
     (task ? '<button class="btn" id="poDone" style="margin-right:auto">' + (task.done ? "↩ Reopen" : "✓ Mark done") + "</button>" : "") +
@@ -1424,13 +1559,16 @@ function openBlockEditor(blkEl, dayKey, fresh) {
   }
 
   const input = popEl.querySelector("#poTitle");
+  const linkInput = popEl.querySelector("#poLink");
   const doSave = () => {
     const t = input.value.trim();
-    for (let s = start; s < end; s++) if (day[s]) day[s].t = t;
+    const l = linkInput.value.trim();
+    for (let s = start; s < end; s++) if (day[s]) { day[s].t = t; if (l) day[s].l = l; else delete day[s].l; }
     save(); refreshDay(dayKey); closePopover();
   };
   popEl.querySelector("#poSave").onclick = doSave;
   input.addEventListener("keydown", e => { if (e.key === "Enter") doSave(); if (e.key === "Escape") closePopover(); });
+  linkInput.addEventListener("keydown", e => { if (e.key === "Enter") doSave(); if (e.key === "Escape") closePopover(); });
   popEl.querySelector("#poDelete").onclick = () => {
     for (let s = start; s < end; s++) delete day[s];
     if (Object.keys(day).length === 0) delete db.days[dayKey];
@@ -1739,9 +1877,19 @@ function fmtDayTiny(k) {
 }
 
 /* ---------------- wiring ---------------- */
-document.getElementById("prevBtn").onclick = () => { weekStart = addDays(weekStart, -7); renderAll(); };
-document.getElementById("nextBtn").onclick = () => { weekStart = addDays(weekStart, 7); renderAll(); };
-document.getElementById("todayBtn").onclick = () => { weekStart = mondayOf(new Date()); renderAll(); scrollToMorning(); };
+function shiftView(n) {
+  if (view === "day") anchor = addDays(anchor, n);
+  else if (view === "month") anchor = new Date(anchor.getFullYear(), anchor.getMonth() + n, 1);
+  else anchor = addDays(anchor, n * 7);
+  weekStart = mondayOf(anchor);
+  renderAll();
+}
+document.getElementById("prevBtn").onclick = () => shiftView(-1);
+document.getElementById("nextBtn").onclick = () => shiftView(1);
+document.getElementById("todayBtn").onclick = () => { anchor = new Date(); weekStart = mondayOf(anchor); renderAll(); if (view !== "month") scrollToMorning(); };
+document.getElementById("viewDayBtn").onclick = () => setView("day");
+document.getElementById("viewWeekBtn").onclick = () => setView("week");
+document.getElementById("viewMonthBtn").onclick = () => setView("month");
 document.getElementById("statsBtn").onclick = () => {
   statsOpen = !statsOpen;
   document.getElementById("statsDrawer").classList.toggle("open", statsOpen);
@@ -1782,6 +1930,18 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "e") { erasing = !erasing; renderPalette(); }
   if (e.key === "g") document.getElementById("goalsBtn").click();
+  if (e.key === "d") setView("day");
+  if (e.key === "w") setView("week");
+  if (e.key === "m") setView("month");
+  if (e.key === "Backspace" || e.key === "Delete") {
+    if (popEl) { popEl.querySelector("#poDelete").click(); e.preventDefault(); }
+    else if (hoverBlk) {
+      const blk = hoverBlk.el;
+      deleteBlockRange(hoverBlk.dayKey, +blk.dataset.start, +blk.dataset.end);
+      hoverBlk = null;
+      e.preventDefault();
+    }
+  }
   const n = parseInt(e.key, 10);
   if (n >= 1 && n <= db.categories.length) { selectedCat = db.categories[n-1].id; erasing = false; armedTask = null; renderPalette(); renderGoals(); }
 });
