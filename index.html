@@ -599,6 +599,11 @@ async function gcalConnect() {
         if (resp && resp.access_token) { gcalToken = resp.access_token; gcalFetch(); }
         else toast("⚠ Google sign-in was cancelled");
       },
+      error_callback: (e) => {
+        toast(e && e.type === "popup_failed_to_open"
+          ? "⚠ Pop-up blocked — allow pop-ups for this site, then press 📅 Sync again"
+          : "⚠ Google sign-in didn't finish — press 📅 Sync to retry");
+      },
     });
     tc.requestAccessToken({ prompt: gcalToken ? "" : "select_account" });
   } catch (e) { toast("⚠ Couldn't load Google sign-in"); }
@@ -1796,6 +1801,7 @@ function renderAll() {
 
 applyCalSeed();
 applyGoalSeed();
+if (GCAL_CLIENT_ID) gsiLoad().catch(() => {}); // preload so the Sync click opens the popup instantly
 applyTheme();
 renderAll();
 scrollToMorning();
