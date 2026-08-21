@@ -469,6 +469,7 @@ input { font: inherit; color: inherit; }
     <div class="spacer"></div>
     <button class="btn outline" id="goalsBtn" title="Show / hide goals">🎯 Goals</button>
     <button class="btn outline" id="gcalBtn" title="Connect your Google Calendar — meetings appear on the grid">📅 Sync</button>
+    <button class="btn icon" id="recapBtn" title="Daily recap — what you did today">✨</button>
     <button class="btn icon" id="soundBtn" title="Toggle sound"></button>
     <button class="btn icon" id="themeBtn" title="Toggle theme"></button>
     <button class="btn outline" id="dataBtn">Data</button>
@@ -1024,6 +1025,7 @@ function autoPlanGoal(g) {
 
 function toggleTaskDone(g, t, fxX, fxY) {
   t.done = !t.done;
+  if (t.done) t.doneAt = dkey(new Date()); else delete t.doneAt;
   save();
   if (t.done) {
     sndDone();
@@ -1894,6 +1896,66 @@ function openDataModal() {
   };
 }
 
+/* ---------------- daily recap ---------------- */
+function recapLine(total, goalH, doneToday, streak) {
+  if (!total) return "Nothing painted yet today — even one honest block counts. Go claim it ✦";
+  const bits = [];
+  if (goalH) bits.push("<b>" + fmtHours(goalH) + "</b> went into your goals");
+  if (doneToday) bits.push("<b>" + doneToday + "</b> task" + (doneToday === 1 ? "" : "s") + " done");
+  if (streak >= 3) bits.push("a <b>" + streak + "-day</b> streak");
+  return bits.length
+    ? "You showed up today: " + bits.join(", ") + ". Keep the chain going 💪"
+    : "You tracked <b>" + fmtHours(total) + "</b> today — showing up is the whole game 💪";
+}
+function dailyRecap() {
+  closeModal();
+  const now = new Date();
+  const tk = dkey(now);
+  const day = db.days[tk] || {};
+  const series = [
+    ...db.categories.map(c => ({ key: "c:" + c.id, name: c.name, color: catColor(c) })),
+    ...db.goals.map(g => ({ key: "g:" + g.id, name: "🎯 " + g.name, color: goalColor(g) })),
+  ];
+  const byKey = {};
+  let total = 0, goalH = 0;
+  for (const v of Object.values(day)) {
+    if (!cellValid(v)) continue;
+    const key = v.c ? "c:" + v.c : "g:" + v.g;
+    byKey[key] = (byKey[key] || 0) + 1; total++;
+    if (v.g) goalH++;
+  }
+  let streak = 0, d = new Date(now);
+  while (true) {
+    const dd = db.days[dkey(d)];
+    if (dd && Object.keys(dd).length) { streak++; d = addDays(d, -1); } else break;
+  }
+  let doneToday = 0;
+  for (const g of db.goals) for (const t of g.tasks) if (t.done && t.doneAt === tk) doneToday++;
+  const rows = series.map(s => ({ s, h: byKey[s.key] || 0 })).filter(x => x.h > 0).sort((a, b) => b.h - a.h);
+
+  modalEl = document.createElement("div");
+  modalEl.className = "overlay";
+  const box = document.createElement("div");
+  box.className = "modal";
+  let html = "<h3>✨ " + DOW[(now.getDay() + 6) % 7] + ", " + MON[now.getMonth()] + " " + now.getDate() + "</h3>" +
+    '<div class="stat-tiles">' +
+    '<div class="tile"><div class="t-label">Tracked today</div><div class="t-value">' + (total / 2).toFixed(1).replace(/\.0$/, "") + "<small> h</small></div></div>" +
+    '<div class="tile"><div class="t-label">Streak</div><div class="t-value">' + streak + "<small> day" + (streak === 1 ? "" : "s") + " 🔥</small></div></div></div>";
+  for (const { s, h } of rows.slice(0, 6)) {
+    html += '<div class="cat-row"><span class="dot" style="background:' + s.color + '"></span>' +
+      '<span class="c-name" style="width:150px">' + esc(s.name) + "</span>" +
+      '<span class="c-val" style="width:auto;text-align:left">' + fmtHours(h) + "</span></div>";
+  }
+  if (doneToday) html += '<div class="note">✓ ' + doneToday + " task" + (doneToday === 1 ? "" : "s") + " completed today</div>";
+  html += '<div class="insight">' + recapLine(total, goalH, doneToday, streak) + "</div>" +
+    '<div class="m-actions"><button class="btn primary" id="recapDone">Done</button></div>';
+  box.innerHTML = html;
+  modalEl.appendChild(box);
+  document.body.appendChild(modalEl);
+  modalEl.addEventListener("pointerdown", e => { if (e.target === modalEl) closeModal(); });
+  box.querySelector("#recapDone").onclick = closeModal;
+}
+
 /* ---------------- analytics ---------------- */
 let statsOpen = false;
 const RANGES = [
@@ -2105,6 +2167,7 @@ document.getElementById("soundBtn").onclick = () => {
   if (db.settings.sound) sndDone();
 };
 document.getElementById("dataBtn").onclick = openDataModal;
+document.getElementById("recapBtn").onclick = dailyRecap;
 document.getElementById("gcalBtn").onclick = gcalConnect;
 if (!GCAL_CLIENT_ID) document.getElementById("gcalBtn").style.display = "none";
 document.getElementById("goalsBtn").onclick = () => {
@@ -2166,6 +2229,12 @@ if (GCAL_CLIENT_ID) gsiLoad().catch(() => {}); // preload so the Sync click open
 applyTheme();
 renderAll();
 scrollToMorning();
+// evening auto-recap: once per day, after 6pm, if anything was tracked today
+if (new Date().getHours() >= 18 && db.settings.lastRecap !== dkey(new Date()) && Object.keys(db.days[dkey(new Date())] || {}).length) {
+  db.settings.lastRecap = dkey(new Date());
+  save();
+  setTimeout(dailyRecap, 900);
+}
 window.addEventListener("resize", () => renderGrid());
 </script>
 </body>
