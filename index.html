@@ -964,6 +964,68 @@ function confetti(x, y) {
     }
   } catch (e) {}
 }
+/* ---- task generation: playbook templates (no AI needed) + optional Claude API ---- */
+const TASK_PLAYBOOKS = [
+  { re: /interview|exam|certif/i, tasks: ["Outline topics to cover (1h)", "Daily practice session (2h)", "Mock session + feedback (1.5h)", "Review weak areas (2h)", "Final cheat-sheet (1h)"] },
+  { re: /research|deep.?dive|learn|study|understand|master|know/i, tasks: ["Define 3 key questions (0.5h)", "Collect the top sources (1.5h)", "Deep read + notes (2h)", "Write a 1-page summary (1.5h)", "Apply one insight (1h)"] },
+  { re: /outreach|network|meet|people|talent|investor|fundrais|pipeline|hire|recruit/i, tasks: ["Define the target profile (0.5h)", "Build a list of 20 (1.5h)", "Draft the outreach message (1h)", "Send the first 10 (1h)", "Follow-ups + tracking (1h)"] },
+  { re: /content|write|article|blog|authority|brand|post|publish/i, tasks: ["Pick 3 topics + your angle (0.5h)", "Draft piece #1 (2h)", "Edit + publish (1h)", "Distribute across channels (1h)", "Engage with replies (0.5h)"] },
+  { re: /build|ship|launch|mvp|product|create|develop/i, tasks: ["Spec what done looks like (1h)", "Break into milestones (0.5h)", "Build session 1 (2h)", "Build session 2 (2h)", "Test + polish (1.5h)", "Ship + announce (1h)"] },
+  { re: /test|experiment|validate|idea/i, tasks: ["Define hypothesis + success metric (0.5h)", "Design the smallest test (1h)", "Run the test (2h)", "Analyze results (1h)", "Decide: kill, iterate, or scale (0.5h)"] },
+];
+const GENERIC_TASKS = ["Define what done looks like (0.5h)", "Break it into 3 milestones (0.5h)", "First working session (2h)", "Midpoint review (0.5h)", "Finish + reflect (1h)"];
+async function generateTasksForGoal(g) {
+  const key = (db.settings.anthropicKey || "").trim();
+  if (key) {
+    try { await aiGenerateTasks(g, key); return; }
+    catch (e) { toast("⚠ AI generation failed — using the playbook instead"); }
+  }
+  const pb = TASK_PLAYBOOKS.find(p => p.re.test(g.name + " " + (g.why || "")));
+  const titles = pb ? pb.tasks : GENERIC_TASKS;
+  const stem = s => s.replace(/\s*\(.*\)$/, "").toLowerCase();
+  let added = 0;
+  for (const title of titles) {
+    if (!g.tasks.some(t => stem(t.title) === stem(title))) { g.tasks.push({ id: uid("t"), title, done: false }); added++; }
+  }
+  save(); renderAll();
+  toast(added ? "✚ Added " + added + " playbook tasks — rename them to fit, then ⚡ plan" : "Playbook tasks already added — edit or delete freely");
+}
+async function aiGenerateTasks(g, key) {
+  toast("🤖 Asking Claude for tasks…");
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: db.settings.aiModel || "claude-3-5-haiku-latest",
+      max_tokens: 400,
+      messages: [{ role: "user", content:
+        "Goal: " + g.name + (g.why ? " — why: " + g.why : "") + (g.due ? " — deadline " + g.due : "") +
+        ". Existing tasks: " + (g.tasks.map(t => t.title).join("; ") || "none") +
+        ". Suggest 3-5 NEW concrete, actionable tasks (no duplicates of existing ones), each with an hour estimate." +
+        " Reply with ONLY a JSON array of strings, each formatted like \"Task name (2h)\"." }],
+    }),
+  });
+  if (!r.ok) throw new Error("api " + r.status);
+  const data = await r.json();
+  const txt = (data.content || []).map(c => c.text || "").join("");
+  const m = txt.match(/\[[\s\S]*\]/);
+  if (!m) throw new Error("no json");
+  const titles = JSON.parse(m[0]);
+  let added = 0;
+  for (const title of titles) {
+    if (typeof title === "string" && title.length > 2 && title.length < 90 && !g.tasks.some(t => t.title === title)) {
+      g.tasks.push({ id: uid("t"), title, done: false }); added++;
+    }
+  }
+  save(); renderAll();
+  toast("🤖 Claude added " + added + " tasks — edit freely, then ⚡ plan");
+}
+
 /* ---- auto-planner: allocate a goal's unfinished estimated tasks into free slots ----
    Strategy: plan from now to the goal's deadline (default +7 days); working
    window 9:00–18:00; weekdays first, weekends only if needed; chunks of up to
@@ -1082,6 +1144,10 @@ function renderGoals() {
       if (armedTask && armedTask.g === g.id) armedTask = null;
       save(); renderAll();
     };
+    const gen = document.createElement("button");
+    gen.className = "goal-gear"; gen.textContent = "✚";
+    gen.title = "Generate tasks — playbook templates, or Claude AI if you saved an API key in Data";
+    gen.onclick = () => generateTasksForGoal(g);
     const plan = document.createElement("button");
     plan.className = "goal-gear"; plan.textContent = "⚡";
     plan.title = "Auto-plan — allocate unfinished tasks (with estimates) into free calendar slots";
@@ -1089,7 +1155,7 @@ function renderGoals() {
     const gear = document.createElement("button");
     gear.className = "goal-gear"; gear.textContent = "⚙"; gear.title = "Goal settings — target, deadline, vision";
     gear.onclick = () => openGoalModal(g);
-    top.append(dot, name, hrs, plan, gear, x);
+    top.append(dot, name, hrs, gen, plan, gear, x);
     card.appendChild(top);
 
     if (g.why) {
