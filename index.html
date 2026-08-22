@@ -815,6 +815,16 @@ function getCat(id) { return db.categories.find(c => c.id === id); }
 function getGoal(id) { return db.goals.find(g => g.id === id); }
 function goalColor(g) { return PALETTE[isDark() ? "dark" : "light"][g.slot]; }
 function goalInkDark(g) { return !isDark() && DARK_TEXT_SLOTS_LIGHT.has(g.slot); }
+/* per-task shade of the goal color: same family, visibly different neighbors */
+function taskShade(goal, taskId) {
+  const base = goalColor(goal);
+  const idx = goal.tasks.findIndex(t => t.id === taskId);
+  if (idx <= 0) return base;
+  const mixes = [null, ["#ffffff", 20], ["#000000", 16], ["#ffffff", 36]];
+  const m = mixes[idx % 4];
+  if (!m) return base;
+  return "color-mix(in srgb, " + base + " " + (100 - m[1]) + "%, " + m[0] + " " + m[1] + "%)";
+}
 function cellValid(cell) { return cell.c ? !!getCat(cell.c) : (cell.g ? !!getGoal(cell.g) : false); }
 function uid(p) { return p + "-" + Math.random().toString(36).slice(2, 8); }
 
@@ -1242,6 +1252,7 @@ function renderGoals() {
     for (const t of g.tasks) {
       const row = document.createElement("div");
       row.className = "task-row" + (t.done ? " done" : "") + (armedTask && armedTask.k === t.id ? " armed" : "");
+      row.style.setProperty("--gp-c", taskShade(g, t.id));
       const chk = document.createElement("span");
       chk.className = "task-check"; chk.textContent = t.done ? "✓" : "";
       chk.onclick = ev => {
@@ -1551,7 +1562,7 @@ function renderBlocks(col, dayKey) {
     const cat = b.c ? getCat(b.c) : null;
     const goal = b.g ? getGoal(b.g) : null;
     if (!cat && !goal) continue;
-    const color = cat ? catColor(cat) : goalColor(goal);
+    const color = cat ? catColor(cat) : (b.k ? taskShade(goal, b.k) : goalColor(goal));
     const inkDark = cat ? catInkDark(cat) : goalInkDark(goal);
     const seriesName = cat ? cat.name : goal.name;
     const el = document.createElement("div");
@@ -1704,7 +1715,7 @@ function drawGhost() {
   const g = document.createElement("div");
   g.className = "paint-ghost" + (paint.erase ? " erasing" : "");
   if (!paint.erase) {
-    if (paint.task) g.style.setProperty("--blk-c", goalColor(paint.task.goal));
+    if (paint.task) g.style.setProperty("--blk-c", taskShade(paint.task.goal, paint.task.task.id));
     else {
       const cat = getCat(paint.catId);
       if (cat) g.style.setProperty("--blk-c", catColor(cat));
