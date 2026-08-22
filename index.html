@@ -648,11 +648,12 @@ async function gcalFetch() {
     const r = await fetch(url, { headers: { Authorization: "Bearer " + gcalToken } });
     if (!r.ok) throw new Error("http " + r.status);
     const data = await r.json();
-    const added = mergeCalendarEvents(data.items || []);
+    const res = mergeCalendarEvents(data.items || []);
     db.settings.gcalSynced = dkey(new Date());
     save(); renderAll();
-    toast(added ? "✦ " + added + " meeting" + (added === 1 ? "" : "s") + " added from Google Calendar"
-                : "Calendar synced — nothing new to add");
+    toast(res.added || res.refreshed
+      ? "✦ " + [res.added ? res.added + " added" : "", res.refreshed ? res.refreshed + " refreshed" : ""].filter(Boolean).join(" · ") + " from Google Calendar"
+      : "Calendar synced — nothing new to add");
   } catch (e) { toast("⚠ Calendar fetch failed — try 📅 Sync again"); }
 }
 /* Merge Google Calendar events into the grid. Only EMPTY slots are painted,
@@ -691,7 +692,7 @@ function mergeCalendarEvents(items) {
   }
   if (!cat) cat = db.categories[0];
   if (!cat) return 0;
-  let added = 0;
+  let added = 0, refreshed = 0;
   for (const ev of items) {
     if (!ev || !ev.id || !ev.start || !ev.start.dateTime || !ev.end || !ev.end.dateTime) continue;
     if (ev.status === "cancelled") continue;
@@ -700,7 +701,7 @@ function mergeCalendarEvents(items) {
     const s = new Date(ev.start.dateTime), e = new Date(ev.end.dateTime);
     if (!(s < e)) continue;
     const link = eventLink(ev);
-    let painted = false;
+    let painted = false, refreshedFlag = false;
     let cur = new Date(s);
     while (cur < e) {
       const midnight = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate());
@@ -712,18 +713,27 @@ function mergeCalendarEvents(items) {
       const dk2 = dkey(cur);
       const day = db.days[dk2] || (db.days[dk2] = {});
       for (let i = s0; i < Math.min(s1, SLOTS); i++) {
+        const cell = { c: cat.id, t: ev.summary || "Busy", e: ev.id };
+        if (link) cell.l = link;
         if (!day[i]) {
-          day[i] = { c: cat.id, t: ev.summary || "Busy" };
-          if (link) day[i].l = link;
+          day[i] = cell;
           painted = true;
+        } else if (day[i].c === cat.id && (day[i].e === ev.id || !day[i].e)) {
+          // refresh this event's own cells (title/link updates) and upgrade
+          // legacy synced cells so adjacent meetings render as separate blocks
+          if (day[i].t !== cell.t || day[i].l !== cell.l || day[i].e !== cell.e) {
+            day[i] = cell;
+            refreshedFlag = true;
+          }
         }
       }
       if (!Object.keys(day).length) delete db.days[dk2];
       cur = dayEnd;
     }
     if (painted) added++;
+    else if (refreshedFlag) refreshed++;
   }
-  return added;
+  return { added, refreshed };
 }
 
 /* ---------------- state ---------------- */
@@ -1517,7 +1527,7 @@ function blocksFor(dayKey) {
   for (let s = 0; s < SLOTS; s++) {
     const cell = day[s];
     if (cell && cellValid(cell)) {
-      const key = cell.c ? "c|" + cell.c : "g|" + cell.g + "|" + (cell.k || "");
+      const key = cell.c ? "c|" + cell.c + "|" + (cell.e || "") : "g|" + cell.g + "|" + (cell.k || "");
       if (cur && cur.key === key) {
         cur.end = s + 1;
         if (cell.t && !cur.t) cur.t = cell.t;
